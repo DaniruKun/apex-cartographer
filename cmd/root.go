@@ -5,12 +5,13 @@ Copyright © 2022 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/DaniruKun/apex-cartographer/imgproc"
 	"github.com/spf13/cobra"
+	"gocv.io/x/gocv"
 )
-
-
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -24,7 +25,59 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Running cartographer")
+		filePath, _ := cmd.Flags().GetString("file")
+
+		if filePath == "" {
+			webcam, _ := gocv.VideoCaptureDevice(2)
+
+			window := gocv.NewWindow("Live Recording")
+			img := gocv.NewMat()
+			for {
+				webcam.Read(&img)
+				window.IMShow(img)
+				if window.WaitKey(1) >= 0 {
+					break
+				}
+			}
+		} else {
+			video, err := gocv.VideoCaptureFile(filePath)
+			if err != nil {
+				fmt.Printf("Error opening video file: %s\n", filePath)
+				return
+			}
+
+			defer video.Close()
+
+			window := gocv.NewWindow("Video Recording")
+			defer window.Close()
+
+			img := gocv.NewMat()
+			defer img.Close()
+
+			// Frame read loop
+			for {
+				if ok := video.Read(&img); !ok {
+					fmt.Printf("Device closed: %v\n", filePath)
+					return
+				}
+
+				if img.Empty() {
+					continue
+				}
+
+				croppedQuadrant := imgproc.CropTopLeftQuadrant(&img)
+				defer croppedQuadrant.Close()
+
+				window.IMShow(croppedQuadrant)
+				if window.WaitKey(1) >= 0 {
+					fmt.Println("Stopping processing...")
+					break
+				}
+			}
+		}
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -42,10 +95,9 @@ func init() {
 	// will be global for your application.
 
 	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.apex-cartographer.yaml)")
+	rootCmd.Flags().StringP("file", "f", "", "Video file to run cartographer on")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
-
-
