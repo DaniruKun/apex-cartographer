@@ -1,5 +1,5 @@
 /*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
+Copyright © 2022 Daniils Petrovs <thedanpetrov@gmail.com>
 
 */
 package cmd
@@ -7,6 +7,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+
+	"image/color"
 
 	"github.com/DaniruKun/apex-cartographer/imgproc"
 	"github.com/spf13/cobra"
@@ -56,6 +58,18 @@ to quickly create a Cobra application.`,
 			img := gocv.NewMat()
 			defer img.Close()
 
+			grey := gocv.NewMat()
+			defer grey.Close()
+
+			const (
+				MinimumArea = 10
+				MinimumAr   = 3
+			)
+
+			var (
+				width, height int
+				ar            float32
+			)
 			// Frame read loop
 			for {
 				if ok := video.Read(&img); !ok {
@@ -69,6 +83,34 @@ to quickly create a Cobra application.`,
 
 				croppedQuadrant := imgproc.CropTopLeftQuadrant(&img)
 				defer croppedQuadrant.Close()
+
+				gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
+				gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
+				contours := gocv.FindContours(grey, gocv.RetrievalExternal, gocv.ChainApproxSimple)
+
+				for i := 0; i < contours.Size(); i++ {
+					contour := contours.At(i)
+
+					area := gocv.ContourArea(contour)
+					if area < MinimumArea {
+						continue
+					}
+
+					rect := gocv.BoundingRect(contour)
+
+					width = rect.Dx()
+					height = rect.Dy()
+					ar = float32(width) / float32(height)
+
+					if height > width || ar < 3 {
+						continue
+					}
+
+					// Draw the found success rectangle
+					gocv.Rectangle(&croppedQuadrant, rect, color.RGBA{0, 0, 255, 0}, 2)
+				}
+
+				contours.Close()
 
 				window.IMShow(croppedQuadrant)
 				if window.WaitKey(1) >= 0 {
