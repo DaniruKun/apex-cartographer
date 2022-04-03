@@ -25,8 +25,6 @@ examples and usage of using your application. For example:
 Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Running cartographer")
 		filePath, _ := cmd.Flags().GetString("file")
@@ -61,15 +59,6 @@ to quickly create a Cobra application.`,
 			grey := gocv.NewMat()
 			defer grey.Close()
 
-			const (
-				MinimumArea = 10
-				MinimumAr   = 3
-			)
-
-			var (
-				width, height int
-				ar            float32
-			)
 			// Frame read loop
 			for {
 				if ok := video.Read(&img); !ok {
@@ -86,31 +75,14 @@ to quickly create a Cobra application.`,
 
 				gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
 				gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
-				contours := gocv.FindContours(grey, gocv.RetrievalExternal, gocv.ChainApproxSimple)
 
-				for i := 0; i < contours.Size(); i++ {
-					contour := contours.At(i)
+				minimapRect, err := imgproc.FindMinimapRect(&grey)
 
-					area := gocv.ContourArea(contour)
-					if area < MinimumArea {
-						continue
-					}
-
-					rect := gocv.BoundingRect(contour)
-
-					width = rect.Dx()
-					height = rect.Dy()
-					ar = float32(width) / float32(height)
-
-					if height > width || ar < 3 {
-						continue
-					}
-
-					// Draw the found success rectangle
-					gocv.Rectangle(&croppedQuadrant, rect, color.RGBA{0, 0, 255, 0}, 2)
+				if err != nil {
+					fmt.Println(err)
+				} else {
+					gocv.Rectangle(&croppedQuadrant, minimapRect, color.RGBA{0, 255, 0, 0}, 2)
 				}
-
-				contours.Close()
 
 				window.IMShow(croppedQuadrant)
 				if window.WaitKey(1) >= 0 {
@@ -132,10 +104,6 @@ func Execute() {
 }
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
 	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.apex-cartographer.yaml)")
 	rootCmd.Flags().StringP("file", "f", "", "Video file to run cartographer on")
 
