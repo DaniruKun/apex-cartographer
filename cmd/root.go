@@ -18,86 +18,120 @@ import (
 
 var minimapRect image.Rectangle
 
+const OlympusMapImgPath = "./resources/olympus-map-1-apex.png"
+const TemplateMatchFrameInterval = 60 // the number of frames to skip minimap matching on, lower -> more precise
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "apex-cartographer",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Short: "Apex Cartographer",
+	Long:  `An app that analyses Apex Legends gameplay to infer the player's position on the map.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Running cartographer")
 		filePath, _ := cmd.Flags().GetString("file")
 
-		if filePath == "" {
-			webcam, _ := gocv.VideoCaptureDevice(2)
+		video, err := gocv.VideoCaptureFile(filePath)
+		if err != nil {
+			fmt.Printf("Error opening video file: %s\n", filePath)
+			return
+		}
 
-			window := gocv.NewWindow("Live Recording")
-			img := gocv.NewMat()
-			for {
-				webcam.Read(&img)
-				window.IMShow(img)
-				if window.WaitKey(1) >= 0 {
-					break
-				}
-			}
-		} else {
-			video, err := gocv.VideoCaptureFile(filePath)
-			if err != nil {
-				fmt.Printf("Error opening video file: %s\n", filePath)
+		defer video.Close()
+
+		window := gocv.NewWindow("Found minimap matches")
+		defer window.Close()
+
+		img := gocv.NewMat()
+		defer img.Close()
+
+		// Stores the map image in memory where to match the minimap rect on
+		mapImg := gocv.IMRead(OlympusMapImgPath, gocv.IMReadUnchanged)
+		defer mapImg.Close()
+
+		grey := gocv.NewMat()
+		defer grey.Close()
+
+		var frameCnt int
+
+		// Frame read loop
+		for {
+
+			if ok := video.Read(&img); !ok {
+				fmt.Printf("Device closed: %v\n", filePath)
 				return
 			}
 
-			defer video.Close()
+			if frameCnt < TemplateMatchFrameInterval {
+				frameCnt++
+				continue
+			}
 
-			window := gocv.NewWindow("Video Recording")
-			defer window.Close()
+			if img.Empty() {
+				continue
+			}
 
-			img := gocv.NewMat()
-			defer img.Close()
+			croppedQuadrant := imgproc.CropTopLeftQuadrant(&img)
+			defer croppedQuadrant.Close()
 
-			grey := gocv.NewMat()
-			defer grey.Close()
+			if minimapRect.Min.X == 0 {
+				// If the minimap has not been found yet, find its rect and set it
+				fmt.Println("Minimap not found yet, detecting...")
 
-			// Frame read loop
-			for {
-				if ok := video.Read(&img); !ok {
-					fmt.Printf("Device closed: %v\n", filePath)
-					return
-				}
+				gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
+				gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
+				candidateMinimapRect, err := imgproc.FindMinimapRect(&grey)
 
-				if img.Empty() {
-					continue
-				}
-				croppedQuadrant := imgproc.CropTopLeftQuadrant(&img)
-				defer croppedQuadrant.Close()
-
-				if minimapRect.Min.X == 0 {
-					// If the minimap has not been found yet, find its rect and set it
-					fmt.Println("Minimap not found yet, detecting...")
-
-					gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
-					gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
-					candidateMinimapRect, err := imgproc.FindMinimapRect(&grey)
-
-					if err != nil {
-						fmt.Println(err)
-					} else {
-						minimapRect = candidateMinimapRect
-						fmt.Println("Minimap found at: ", minimapRect.Min.X, "x", minimapRect.Min.Y)
-					}
-				}
-
-				gocv.Rectangle(&croppedQuadrant, minimapRect, color.RGBA{0, 255, 0, 0}, 2)
-				window.IMShow(croppedQuadrant)
-				if window.WaitKey(1) >= 0 {
-					fmt.Println("Stopping processing...")
-					break
+				if err != nil {
+					fmt.Println(err)
+				} else {
+					minimapRect = candidateMinimapRect
+					fmt.Println("Minimap found at: ", minimapRect.Min.X, "x", minimapRect.Min.Y)
 				}
 			}
+
+			if minimapRect.Min.X != 0 {
+				// Perform matching only when the minimap rect has been previously detected
+
+				// Create template mat
+				template := croppedQuadrant.Region(minimapRect)
+				defer template.Close()
+
+				// TODO: Dynamically infer scaling factor and new size
+				scaleFactor := 0.5
+
+				newWidth := template.Cols() / 2
+				newHeight := template.Cols() / 2
+
+				gocv.Resize(template, &template, image.Point{X: newWidth, Y: newHeight}, scaleFactor, scaleFactor, gocv.InterpolationLanczos4)
+
+				matchRes := gocv.NewMat()
+				defer matchRes.Close()
+
+				// TODO: Try out different matching methods
+				method := gocv.TmCcoeff
+
+				gocv.MatchTemplate(mapImg, template, &matchRes, method, gocv.NewMat())
+				_, _, _, maxLoc := gocv.MinMaxLoc(matchRes)
+
+				var foundLoc image.Point
+
+				if method == gocv.TmCcoeff {
+					foundLoc = maxLoc
+				}
+
+				matchRect := image.Rect(foundLoc.X, foundLoc.Y, foundLoc.X+template.Cols(), foundLoc.Y+template.Rows())
+
+				fmt.Printf("Found minimap location: %d %d\n", foundLoc.X, foundLoc.Y)
+
+				gocv.Rectangle(&mapImg, matchRect, color.RGBA{255, 255, 0, 0}, 2)
+			}
+
+			window.IMShow(mapImg)
+			if window.WaitKey(1) >= 0 {
+				fmt.Println("Stopping processing...")
+				break
+			}
+			frameCnt = 0 // reset frame counter
 		}
 	},
 }
