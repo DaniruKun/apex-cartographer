@@ -78,21 +78,17 @@ func FindMinimapRect(src *gocv.Mat) (image.Rectangle, error) {
 // Create a loop from which frames are read and decoded from a given video file at `filePath`
 // The minimap is found, then located on the full size `mapImgPath`
 func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameInterval int) {
-	var minimapRect image.Rectangle
+	var (
+		minimapRect image.Rectangle
+	)
+	const frameBufferSize = 1024 // number of frames to keep in the video processing buffer
 
-	video, err := gocv.VideoCaptureFile(filePath)
-	if err != nil {
-		fmt.Printf("Error opening video file: %s\n", filePath)
-		return
-	}
+	frameBuffer := make(chan gocv.Mat, frameBufferSize)
 
-	defer video.Close()
+	go videoFrameProducer(filePath, matchFrameInterval, frameBuffer)
 
 	window := gocv.NewWindow("Found minimap matches")
 	defer window.Close()
-
-	frame := gocv.NewMat()
-	defer frame.Close()
 
 	// Stores the map image in memory where to match the minimap rect on
 	mapImg := gocv.IMRead(mapImgPath, gocv.IMReadUnchanged)
@@ -101,27 +97,20 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 	grey := gocv.NewMat()
 	defer grey.Close()
 
-	var frameCnt int
-
 	// Frame read loop
+	fmt.Println("Starting video frame consumer...")
 	for {
-		// Read frame
-		if ok := video.Read(&frame); !ok {
-			fmt.Printf("Device closed: %v\n", filePath)
-			return
-		}
+		// Read frame from frame buffer
+		vf, ok := <-frameBuffer
+		defer vf.Close()
 
-		if frameCnt < matchFrameInterval {
-			frameCnt++
-			continue
-		}
-
-		if frame.Empty() {
-			continue
+		if !ok {
+			fmt.Println("Frame buffer is closed!")
+			break
 		}
 
 		// Crop to quadrant containing the minimap
-		croppedQuadrant := CropTopLeftQuadrant(&frame)
+		croppedQuadrant := CropTopLeftQuadrant(&vf)
 		defer croppedQuadrant.Close()
 
 		// If the minimap has not been found yet, find its rect and set it
@@ -179,6 +168,39 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 			fmt.Println("Stopping processing...")
 			break
 		}
+	}
+}
+
+func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan gocv.Mat) {
+	fmt.Println("Starting frame producer...")
+	var frameCnt int
+	frame := gocv.NewMat()
+	defer frame.Close()
+
+	video, err := gocv.VideoCaptureFile(filePath)
+	if err != nil {
+		fmt.Printf("Error opening video file: %s\n", filePath)
+		return
+	}
+
+	for {
+		if ok := video.Read(&frame); !ok {
+			fmt.Printf("Device closed: %v\n", filePath)
+			break
+		}
+
+		if frameCnt < matchFrameInterval {
+			frameCnt++
+			continue
+		}
+
+		if frame.Empty() {
+			continue
+		}
+
+		buffer <- frame
 		frameCnt = 0 // reset frame counter
 	}
+
+	defer video.Close()
 }
