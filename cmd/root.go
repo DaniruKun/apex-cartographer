@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"fmt"
+	"image"
 	"os"
 
 	"image/color"
@@ -14,6 +15,8 @@ import (
 	"github.com/spf13/cobra"
 	"gocv.io/x/gocv"
 )
+
+var minimapRect image.Rectangle
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -69,21 +72,26 @@ to quickly create a Cobra application.`,
 				if img.Empty() {
 					continue
 				}
-
 				croppedQuadrant := imgproc.CropTopLeftQuadrant(&img)
 				defer croppedQuadrant.Close()
 
-				gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
-				gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
+				if minimapRect.Min.X == 0 {
+					// If the minimap has not been found yet, find its rect and set it
+					fmt.Println("Minimap not found yet, detecting...")
 
-				minimapRect, err := imgproc.FindMinimapRect(&grey)
+					gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
+					gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
+					candidateMinimapRect, err := imgproc.FindMinimapRect(&grey)
 
-				if err != nil {
-					fmt.Println(err)
-				} else {
-					gocv.Rectangle(&croppedQuadrant, minimapRect, color.RGBA{0, 255, 0, 0}, 2)
+					if err != nil {
+						fmt.Println(err)
+					} else {
+						minimapRect = candidateMinimapRect
+						fmt.Println("Minimap found at: ", minimapRect.Min.X, "x", minimapRect.Min.Y)
+					}
 				}
 
+				gocv.Rectangle(&croppedQuadrant, minimapRect, color.RGBA{0, 255, 0, 0}, 2)
 				window.IMShow(croppedQuadrant)
 				if window.WaitKey(1) >= 0 {
 					fmt.Println("Stopping processing...")
