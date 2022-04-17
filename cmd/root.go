@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const OlympusMapImgPath = "./resources/olympus-map-1-apex.png"
+const OlympusMapImgPath = "./resources/maps/olympus.png"
 const TemplateMatchFrameInterval = 60 // the number of frames to skip minimap matching on, lower -> more precise
 
 // rootCmd represents the base command when called without any subcommands

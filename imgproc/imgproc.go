@@ -91,7 +91,7 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 	defer window.Close()
 
 	// Stores the map image in memory where to match the minimap rect on
-	mapImg := gocv.IMRead(mapImgPath, gocv.IMReadUnchanged)
+	mapImg := gocv.IMRead(mapImgPath, gocv.IMReadColor)
 	defer mapImg.Close()
 
 	grey := gocv.NewMat()
@@ -102,12 +102,13 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 	for {
 		// Read frame from frame buffer
 		vf, ok := <-frameBuffer
-		defer vf.Close()
 
 		if !ok {
 			fmt.Println("Frame buffer is closed!")
 			break
 		}
+
+		defer vf.Close()
 
 		// Crop to quadrant containing the minimap
 		croppedQuadrant := CropTopLeftQuadrant(&vf)
@@ -134,13 +135,9 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 		template := croppedQuadrant.Region(minimapRect)
 		defer template.Close()
 
-		// TODO: Dynamically infer scaling factor and new size
-		scaleFactor := 0.5
+		const c = 0.71
 
-		newWidth := template.Cols() / 2
-		newHeight := template.Rows() / 2
-
-		gocv.Resize(template, &template, image.Point{X: newWidth, Y: newHeight}, scaleFactor, scaleFactor, gocv.InterpolationLanczos4)
+		doResize(&template, c)
 
 		matchRes := gocv.NewMat()
 		defer matchRes.Close()
@@ -159,16 +156,29 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 
 		matchRect := image.Rect(foundLoc.X, foundLoc.Y, foundLoc.X+template.Cols(), foundLoc.Y+template.Rows())
 
+		matchRectCenter := image.Point{X: matchRect.Min.X + (matchRect.Dx() / 2), Y: matchRect.Min.Y + (matchRect.Dy() / 2)}
+
 		fmt.Printf("Found minimap location: %d %d\n", foundLoc.X, foundLoc.Y)
 
-		gocv.Rectangle(&mapImg, matchRect, color.RGBA{255, 255, 0, 0}, 2)
+		// gocv.Rectangle(&mapImg, matchRect, color.RGBA{255, 255, 0, 0}, 2)
+		gocv.Circle(&mapImg, matchRectCenter, 3, color.RGBA{0, 255, 0, 255}, 3)
 
 		window.IMShow(mapImg)
 		if window.WaitKey(1) >= 0 {
 			fmt.Println("Stopping processing...")
+			close(frameBuffer)
 			break
 		}
 	}
+}
+
+func doResize(src *gocv.Mat, scaleFactor float64) {
+	newDims := image.Point{
+		X: int(float64(src.Cols()) * scaleFactor),
+		Y: int(float64(src.Rows()) * scaleFactor),
+	}
+
+	gocv.Resize(*src, src, newDims, scaleFactor, scaleFactor, gocv.InterpolationLanczos4)
 }
 
 func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan gocv.Mat) {
@@ -178,14 +188,18 @@ func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan goc
 	defer frame.Close()
 
 	video, err := gocv.VideoCaptureFile(filePath)
+
 	if err != nil {
 		fmt.Printf("Error opening video file: %s\n", filePath)
 		return
 	}
 
+	defer video.Close()
+
 	for {
 		if ok := video.Read(&frame); !ok {
 			fmt.Printf("Device closed: %v\n", filePath)
+			close(buffer)
 			break
 		}
 
@@ -201,6 +215,4 @@ func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan goc
 		buffer <- frame
 		frameCnt = 0 // reset frame counter
 	}
-
-	defer video.Close()
 }
