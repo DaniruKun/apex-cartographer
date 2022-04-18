@@ -9,6 +9,8 @@ import (
 	"gocv.io/x/gocv"
 )
 
+const C = 0.71 // the ratio of the size of the minimap rectange on the map to the one in the first-person view
+
 // Creates and returns a new Mat from the top left quadrant of the src Mat
 func CropTopLeftQuadrant(mat *gocv.Mat) gocv.Mat {
 	srcWidth := mat.Cols()
@@ -80,12 +82,11 @@ func FindMinimapRect(src *gocv.Mat) (image.Rectangle, error) {
 func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameInterval int) {
 	var (
 		minimapRect image.Rectangle
+		foundLoc    image.Point
 	)
 	const frameBufferSize = 1024 // number of frames to keep in the video processing buffer
 
 	frameBuffer := make(chan gocv.Mat, frameBufferSize)
-
-	go videoFrameProducer(filePath, matchFrameInterval, frameBuffer)
 
 	window := gocv.NewWindow("Found minimap matches")
 	defer window.Close()
@@ -96,6 +97,17 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 
 	grey := gocv.NewMat()
 	defer grey.Close()
+
+	template := gocv.NewMat()
+	defer template.Close()
+
+	croppedQuadrant := gocv.NewMat()
+	defer croppedQuadrant.Close()
+
+	matchRes := gocv.NewMat()
+	defer matchRes.Close()
+
+	go videoFrameProducer(filePath, matchFrameInterval, frameBuffer)
 
 	// Frame read loop
 	fmt.Println("Starting video frame consumer...")
@@ -111,7 +123,7 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 		defer vf.Close()
 
 		// Crop to quadrant containing the minimap
-		croppedQuadrant := CropTopLeftQuadrant(&vf)
+		croppedQuadrant = CropTopLeftQuadrant(&vf)
 		defer croppedQuadrant.Close()
 
 		// If the minimap has not been found yet, find its rect and set it
@@ -132,23 +144,15 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 		}
 
 		// Create template mat
-		template := croppedQuadrant.Region(minimapRect)
-		defer template.Close()
+		template = croppedQuadrant.Region(minimapRect)
 
-		const c = 0.71
-
-		doResize(&template, c)
-
-		matchRes := gocv.NewMat()
-		defer matchRes.Close()
+		doResize(&template, C)
 
 		// TODO: Try out different matching methods
 		method := gocv.TmCcoeff
 
 		gocv.MatchTemplate(mapImg, template, &matchRes, method, gocv.NewMat())
 		_, _, _, maxLoc := gocv.MinMaxLoc(matchRes)
-
-		var foundLoc image.Point
 
 		if method == gocv.TmCcoeff {
 			foundLoc = maxLoc
@@ -169,6 +173,10 @@ func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameIn
 			close(frameBuffer)
 			break
 		}
+
+		// var b bytes.Buffer
+		// gocv.MatProfile.WriteTo(&b, 1)
+		// fmt.Print(b.String())
 	}
 }
 
