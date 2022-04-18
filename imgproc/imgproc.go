@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"os"
 
 	"gocv.io/x/gocv"
 )
+
+const OlympusMapImgPath = "./resources/maps/olympus.png"
 
 const C = 0.71 // the ratio of the size of the minimap rectange on the map to the one in the first-person view
 
@@ -77,107 +80,18 @@ func FindMinimapRect(src *gocv.Mat) (image.Rectangle, error) {
 	}
 }
 
-// Create a loop from which frames are read and decoded from a given video file at `filePath`
-// The minimap is found, then located on the full size `mapImgPath`
-func TrackMinimapLocationFromVideoFile(filePath, mapImgPath string, matchFrameInterval int) {
-	var (
-		minimapRect image.Rectangle
-		foundLoc    image.Point
-	)
+func TrackMinimapLocationFromVideoFile(filePath string, matchFrameInterval int) {
 	const frameBufferSize = 1024 // number of frames to keep in the video processing buffer
 
 	frameBuffer := make(chan gocv.Mat, frameBufferSize)
+	results := make(chan image.Point, 128)
 
-	window := gocv.NewWindow("Found minimap matches")
-	defer window.Close()
+	go frameProducer(filePath, matchFrameInterval, frameBuffer)
 
-	// Stores the map image in memory where to match the minimap rect on
-	mapImg := gocv.IMRead(mapImgPath, gocv.IMReadColor)
-	defer mapImg.Close()
+	go frameProcessor(frameBuffer, results)
 
-	grey := gocv.NewMat()
-	defer grey.Close()
-
-	template := gocv.NewMat()
-	defer template.Close()
-
-	croppedQuadrant := gocv.NewMat()
-	defer croppedQuadrant.Close()
-
-	matchRes := gocv.NewMat()
-	defer matchRes.Close()
-
-	go videoFrameProducer(filePath, matchFrameInterval, frameBuffer)
-
-	// Frame read loop
-	fmt.Println("Starting video frame consumer...")
-	for {
-		// Read frame from frame buffer
-		vf, ok := <-frameBuffer
-
-		if !ok {
-			fmt.Println("Frame buffer is closed!")
-			break
-		}
-
-		defer vf.Close()
-
-		// Crop to quadrant containing the minimap
-		croppedQuadrant = CropTopLeftQuadrant(&vf)
-		defer croppedQuadrant.Close()
-
-		// If the minimap has not been found yet, find its rect and set it
-		if minimapRect.Min.X == 0 {
-			fmt.Println("Minimap not found yet, detecting...")
-
-			gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
-			gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
-			candidateMinimapRect, err := FindMinimapRect(&grey)
-
-			if err != nil {
-				fmt.Println(err)
-				continue
-			} else {
-				minimapRect = candidateMinimapRect
-				fmt.Println("Minimap found at: ", minimapRect.Min.X, "x", minimapRect.Min.Y)
-			}
-		}
-
-		// Create template mat
-		template = croppedQuadrant.Region(minimapRect)
-
-		doResize(&template, C)
-
-		// TODO: Try out different matching methods
-		method := gocv.TmCcoeff
-
-		gocv.MatchTemplate(mapImg, template, &matchRes, method, gocv.NewMat())
-		_, _, _, maxLoc := gocv.MinMaxLoc(matchRes)
-
-		if method == gocv.TmCcoeff {
-			foundLoc = maxLoc
-		}
-
-		matchRect := image.Rect(foundLoc.X, foundLoc.Y, foundLoc.X+template.Cols(), foundLoc.Y+template.Rows())
-
-		matchRectCenter := image.Point{X: matchRect.Min.X + (matchRect.Dx() / 2), Y: matchRect.Min.Y + (matchRect.Dy() / 2)}
-
-		fmt.Printf("Found minimap location: %d %d\n", foundLoc.X, foundLoc.Y)
-
-		// gocv.Rectangle(&mapImg, matchRect, color.RGBA{255, 255, 0, 0}, 2)
-		gocv.Circle(&mapImg, matchRectCenter, 3, color.RGBA{0, 255, 0, 255}, 3)
-
-		window.IMShow(mapImg)
-		if window.WaitKey(1) >= 0 {
-			fmt.Println("Stopping processing...")
-			close(frameBuffer)
-			break
-		}
-
-		// var b bytes.Buffer
-		// gocv.MatProfile.WriteTo(&b, 1)
-		// fmt.Print(b.String())
-	}
+	// Needs to be in the main thread because of the UI
+	resultsPresenter(results)
 }
 
 func doResize(src *gocv.Mat, scaleFactor float64) {
@@ -189,7 +103,8 @@ func doResize(src *gocv.Mat, scaleFactor float64) {
 	gocv.Resize(*src, src, newDims, scaleFactor, scaleFactor, gocv.InterpolationLanczos4)
 }
 
-func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan gocv.Mat) {
+// Produces Mats read from a video file at `filePath` into a `buffer` channel
+func frameProducer(filePath string, matchFrameInterval int, buffer chan<- gocv.Mat) {
 	fmt.Println("Starting frame producer...")
 	var frameCnt int
 	frame := gocv.NewMat()
@@ -199,6 +114,7 @@ func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan goc
 
 	if err != nil {
 		fmt.Printf("Error opening video file: %s\n", filePath)
+		close(buffer)
 		return
 	}
 
@@ -207,7 +123,6 @@ func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan goc
 	for {
 		if ok := video.Read(&frame); !ok {
 			fmt.Printf("Device closed: %v\n", filePath)
-			close(buffer)
 			break
 		}
 
@@ -223,4 +138,120 @@ func videoFrameProducer(filePath string, matchFrameInterval int, buffer chan goc
 		buffer <- frame
 		frameCnt = 0 // reset frame counter
 	}
+	close(buffer)
+	fmt.Println("Frame producer stopped!")
+}
+
+// Processes Mats from the video frame `buffer`, performs detection, and puts the detection results into `results` channel
+func frameProcessor(buffer <-chan gocv.Mat, results chan<- image.Point) {
+	fmt.Println("Starting video frame processor...")
+
+	// Prepare all of the Mats we will need
+	var (
+		err                  error
+		candidateMinimapRect image.Rectangle
+		minimapRect          image.Rectangle
+		matchRect            image.Rectangle
+		matchRectCenter      image.Point
+		foundLoc             image.Point
+	)
+
+	const matchMethod = gocv.TmCcoeff
+
+	// Stores the map image in memory where to match the minimap rect on
+	mapImg := gocv.IMRead(OlympusMapImgPath, gocv.IMReadColor)
+	defer mapImg.Close()
+
+	croppedQuadrant := gocv.NewMat()
+	defer croppedQuadrant.Close()
+
+	grey := gocv.NewMat()
+	defer grey.Close()
+
+	template := gocv.NewMat()
+	defer template.Close()
+
+	matchRes := gocv.NewMat()
+	defer matchRes.Close()
+
+	for {
+		frame, more := <-buffer
+
+		if !more {
+			fmt.Println("No more frames to process!")
+			break
+		}
+		defer frame.Close()
+
+		// Crop to quadrant containing the minimap
+		croppedQuadrant = CropTopLeftQuadrant(&frame)
+
+		// If the minimap has not been found yet, find its rect and set it
+		if minimapRect.Min.X == 0 {
+			fmt.Println("Minimap not found yet, detecting...")
+
+			gocv.CvtColor(croppedQuadrant, &grey, gocv.ColorRGBToGray)
+			gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
+			candidateMinimapRect, err = FindMinimapRect(&grey)
+
+			if err != nil {
+				fmt.Println(err)
+				// Skip the frame and try with the next one
+				continue
+			} else {
+				minimapRect = candidateMinimapRect
+				fmt.Println("Minimap found at: ", minimapRect.Min.X, "x", minimapRect.Min.Y)
+			}
+		}
+
+		// Create template and resize it to correct dimensions for matching
+		template = croppedQuadrant.Region(minimapRect)
+		doResize(&template, C)
+
+		gocv.MatchTemplate(mapImg, template, &matchRes, matchMethod, gocv.NewMat())
+		_, _, _, maxLoc := gocv.MinMaxLoc(matchRes)
+
+		if matchMethod == gocv.TmCcoeff {
+			foundLoc = maxLoc
+		}
+
+		matchRect = image.Rect(foundLoc.X, foundLoc.Y, foundLoc.X+template.Cols(), foundLoc.Y+template.Rows())
+		matchRectCenter = image.Point{X: matchRect.Min.X + (matchRect.Dx() / 2), Y: matchRect.Min.Y + (matchRect.Dy() / 2)}
+
+		results <- matchRectCenter
+	}
+	close(results)
+	fmt.Println("Frame processor stopped!")
+}
+
+// Loops over messages in the `results` channel and presents the results in an OpenCV GUI window, and outputs to console
+func resultsPresenter(results <-chan image.Point) {
+	fmt.Println("Starting results presenter...")
+
+	window := gocv.NewWindow("Map movement")
+	defer window.Close()
+
+	mapImg := gocv.IMRead(OlympusMapImgPath, gocv.IMReadColor)
+	defer mapImg.Close()
+
+	for {
+		result, more := <-results
+
+		if !more {
+			fmt.Println("No more results")
+			break
+		}
+
+		gocv.Circle(&mapImg, result, 3, color.RGBA{0, 255, 0, 255}, 3)
+		window.IMShow(mapImg)
+
+		fmt.Printf("Found point at: (%d, %d)\n", result.X, result.Y)
+
+		if window.WaitKey(1) >= 0 {
+			fmt.Println("User requested to stop processing...")
+			os.Exit(0)
+			break
+		}
+	}
+	fmt.Println("Results presenter stopped!")
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const OlympusMapImgPath = "./resources/maps/olympus.png"
 const TemplateMatchFrameInterval = 60 // the number of frames to skip minimap matching on, lower -> more precise
 
 // rootCmd represents the base command when called without any subcommands
@@ -24,7 +23,7 @@ var rootCmd = &cobra.Command{
 		fmt.Println("Running cartographer")
 		filePath, _ := cmd.Flags().GetString("file")
 
-		imgproc.TrackMinimapLocationFromVideoFile(filePath, OlympusMapImgPath, TemplateMatchFrameInterval)
+		imgproc.TrackMinimapLocationFromVideoFile(filePath, TemplateMatchFrameInterval)
 	},
 }
 
