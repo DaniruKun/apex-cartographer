@@ -3,7 +3,6 @@ package imgproc
 import (
 	"fmt"
 	"image"
-	"image/color"
 	"os"
 
 	"gocv.io/x/gocv"
@@ -52,6 +51,14 @@ func frameProducer(filePath string, matchFrameInterval int, buffer chan<- gocv.M
 	}
 
 	defer video.Close()
+
+	// Get basic video capture info from props
+	w := video.Get(3)
+	h := video.Get(4)
+	fps := video.Get(5)
+	// framesCountInVideo := video.Get(7)
+
+	fmt.Printf("Reading video file %s\nFPS: %f\nDimensions: %f x %f\n", filePath, fps, w, h)
 
 	for {
 		if ok := video.Read(&frame); !ok {
@@ -167,6 +174,8 @@ func resultsPresenter(results <-chan image.Point) {
 	mapImg := gocv.IMRead(OlympusMapImgPath, gocv.IMReadColor)
 	defer mapImg.Close()
 
+	markerColor := HSV{120, 1, 1}
+
 	for {
 		result, more := <-results
 
@@ -175,9 +184,9 @@ func resultsPresenter(results <-chan image.Point) {
 			break
 		}
 
-		markerColor := color.RGBA{0, 255, 0, 255}
+		markerColor.RotateHue(5, "cw")
 
-		gocv.Circle(&mapImg, result, 3, markerColor, 3)
+		gocv.Circle(&mapImg, result, 3, markerColor.RGBA(), 3)
 		window.IMShow(mapImg)
 
 		fmt.Printf("Found point at: (%d, %d)\n", result.X, result.Y)
