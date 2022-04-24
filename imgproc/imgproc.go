@@ -3,22 +3,28 @@ package imgproc
 import (
 	"fmt"
 	"image"
+	"log"
 	"os"
+
+	"github.com/DaniruKun/apex-cartographer/utils"
 
 	"gocv.io/x/gocv"
 )
 
-const OlympusMapImgPath = "./resources/maps/olympus.png"
-
 const C = 0.71 // the ratio of the size of the minimap rectange on the map to the one in the first-person view
 
-func TrackMinimapLocationFromVideoFile(filePath string, matchFrameInterval int) {
+var config Config // global config for the processing session
+
+// Run recognition and result recording from a local video file at `filePath`
+// The `userConfig` is later used in all related functions
+func RunTrackingFromFile(filePath string, userConfig Config) {
 	const frameBufferSize = 1024 // number of frames to keep in the video processing buffer
+	config = userConfig
 
 	frameBuffer := make(chan gocv.Mat, frameBufferSize)
 	results := make(chan image.Point, 128)
 
-	go frameProducer(filePath, matchFrameInterval, frameBuffer)
+	go frameProducer(filePath, config.FrameInterval, frameBuffer)
 
 	go frameProcessor(frameBuffer, results)
 
@@ -36,9 +42,9 @@ func doResize(src *gocv.Mat, scaleFactor float64) {
 }
 
 // Produces Mats read from a video file at `filePath` into a `buffer` channel
-func frameProducer(filePath string, matchFrameInterval int, buffer chan<- gocv.Mat) {
+func frameProducer(filePath string, frameInterval int, buffer chan<- gocv.Mat) {
 	fmt.Println("Starting frame producer...")
-	var frameCnt int
+
 	frame := gocv.NewMat()
 	defer frame.Close()
 
@@ -52,34 +58,33 @@ func frameProducer(filePath string, matchFrameInterval int, buffer chan<- gocv.M
 
 	defer video.Close()
 
-	// Get basic video capture info from props
 	w := video.Get(3)
 	h := video.Get(4)
 	fps := video.Get(5)
-	// framesCountInVideo := video.Get(7)
+	frameCntTotal := video.Get(7)
+	currFrameNo := 0
 
 	fmt.Printf("Reading video file %s\nFPS: %f\nDimensions: %f x %f\n", filePath, fps, w, h)
 
 	for {
+		video.Grab(frameInterval)
 		if ok := video.Read(&frame); !ok {
 			fmt.Printf("Device closed: %v\n", filePath)
 			break
-		}
-
-		if frameCnt < matchFrameInterval {
-			frameCnt++
-			continue
 		}
 
 		if frame.Empty() {
 			continue
 		}
 
+		currFrameNo += frameInterval
+
 		buffer <- frame
-		frameCnt = 0 // reset frame counter
+		fmt.Printf("Read frame %d of %d | ", currFrameNo, int(frameCntTotal))
 	}
 	close(buffer)
 	fmt.Println("Frame producer stopped!")
+	os.Exit(0)
 }
 
 // Processes Mats from the video frame `buffer`, performs detection, and puts the detection results into `results` channel
@@ -98,8 +103,14 @@ func frameProcessor(buffer <-chan gocv.Mat, results chan<- image.Point) {
 
 	const matchMethod = gocv.TmCcoeff
 
+	mapFilePath, err := utils.GetMapPath(config.MapName)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
 	// Stores the map image in memory where to match the minimap rect on
-	mapImg := gocv.IMRead(OlympusMapImgPath, gocv.IMReadColor)
+	mapImg := gocv.IMRead(mapFilePath, gocv.IMReadColor)
 	defer mapImg.Close()
 
 	croppedQuadrant := gocv.NewMat()
@@ -164,17 +175,23 @@ func frameProcessor(buffer <-chan gocv.Mat, results chan<- image.Point) {
 	fmt.Println("Frame processor stopped!")
 }
 
-// Loops over messages in the `results` channel and presents the results in an OpenCV GUI window, and outputs to console
+// Loops over messages in the `results` channel and presents the results
 func resultsPresenter(results <-chan image.Point) {
 	fmt.Println("Starting results presenter...")
 
-	window := gocv.NewWindow("Map movement")
-	defer window.Close()
+	mapFilePath, err := utils.GetMapPath(config.MapName)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
 
-	mapImg := gocv.IMRead(OlympusMapImgPath, gocv.IMReadColor)
+	mapImg := gocv.IMRead(mapFilePath, gocv.IMReadColor)
 	defer mapImg.Close()
 
 	markerColor := HSV{120, 1, 1}
+
+	window := gocv.NewWindow("Map movement")
+	defer window.Close()
 
 	for {
 		result, more := <-results
@@ -184,17 +201,20 @@ func resultsPresenter(results <-chan image.Point) {
 			break
 		}
 
+		fmt.Printf("Found point at: (%d, %d)\n", result.X, result.Y)
+
 		markerColor.RotateHue(5, "cw")
 
 		gocv.Circle(&mapImg, result, 3, markerColor.RGBA(), 3)
-		window.IMShow(mapImg)
 
-		fmt.Printf("Found point at: (%d, %d)\n", result.X, result.Y)
+		if config.ShowGUI {
+			window.IMShow(mapImg)
 
-		if window.WaitKey(1) >= 0 {
-			fmt.Println("User requested to stop processing...")
-			os.Exit(0)
-			break
+			if window.WaitKey(1) >= 0 {
+				fmt.Println("User requested to stop processing...")
+				os.Exit(0)
+				break
+			}
 		}
 	}
 	fmt.Println("Results presenter stopped!")

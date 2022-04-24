@@ -1,10 +1,12 @@
 /*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
+Copyright © 2022 Daniils Petrovs <thedanpetrov@gmail.com>
 
 */
 package main
 
-import "github.com/DaniruKun/apex-cartographer/cmd"
+import (
+	"github.com/DaniruKun/apex-cartographer/cmd"
+)
 
 func main() {
 	cmd.Execute()

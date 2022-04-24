@@ -12,7 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const TemplateMatchFrameInterval = 60 // the number of frames to skip minimap matching on, lower -> more precise
+const DefaultFrameInterval = 120
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -20,10 +20,13 @@ var rootCmd = &cobra.Command{
 	Short: "Apex Cartographer",
 	Long:  `An app that analyses Apex Legends gameplay to infer the player's position on the map.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Running cartographer")
+		fmt.Println("Running Apex Cartographer")
 		filePath, _ := cmd.Flags().GetString("file")
+		showGUI, _ := cmd.Flags().GetBool("gui")
 
-		imgproc.TrackMinimapLocationFromVideoFile(filePath, TemplateMatchFrameInterval)
+		config := imgproc.Config{ShowGUI: showGUI, FrameInterval: DefaultFrameInterval, MapName: "olympus"}
+
+		imgproc.RunTrackingFromFile(filePath, config)
 	},
 }
 
@@ -39,8 +42,6 @@ func Execute() {
 func init() {
 	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.apex-cartographer.yaml)")
 	rootCmd.Flags().StringP("file", "f", "", "Video file to run cartographer on")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	rootCmd.Flags().BoolP("gui", "g", false, "Show GUI with preview")
+	rootCmd.Flags().BoolP("save", "s", false, "Save route image")
 }
