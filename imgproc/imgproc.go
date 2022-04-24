@@ -3,8 +3,10 @@ package imgproc
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/DaniruKun/apex-cartographer/utils"
 
@@ -12,6 +14,8 @@ import (
 )
 
 const C = 0.71 // the ratio of the size of the minimap rectange on the map to the one in the first-person view
+
+var ColorGreen = color.RGBA{0, 255, 0, 255}
 
 var config Config // global config for the processing session
 
@@ -130,6 +134,7 @@ func frameProcessor(buffer <-chan gocv.Mat, results chan<- image.Point) {
 
 		if !more {
 			fmt.Println("No more frames to process!")
+			frame.Close()
 			break
 		}
 		defer frame.Close()
@@ -145,13 +150,20 @@ func frameProcessor(buffer <-chan gocv.Mat, results chan<- image.Point) {
 			gocv.Threshold(grey, &grey, 150, 255, gocv.ThresholdBinary)
 			candidateMinimapRect, err = FindMinimapRect(&grey)
 
+			if config.Debug {
+				gocv.Rectangle(&croppedQuadrant, candidateMinimapRect, ColorGreen, 4)
+				gocv.IMWrite(filepath.Join("debug", "minimap-detection-frame-debug.png"), frame)
+				gocv.IMWrite(filepath.Join("debug", "minimap-detection-grey-debug.png"), grey)
+				gocv.IMWrite(filepath.Join("debug", "minimap-detection-candidate-rect-debug.png"), croppedQuadrant)
+			}
+
 			if err != nil {
 				fmt.Println(err)
 				// Skip the frame and try with the next one
 				continue
 			} else {
 				minimapRect = candidateMinimapRect
-				fmt.Println("Minimap found at: ", minimapRect.Min.X, "x", minimapRect.Min.Y)
+				fmt.Printf("Minimap found at: (%d, %d)\n", minimapRect.Min.X, minimapRect.Min.Y)
 			}
 		}
 
@@ -201,21 +213,29 @@ func resultsPresenter(results <-chan image.Point) {
 			break
 		}
 
-		fmt.Printf("Found point at: (%d, %d)\n", result.X, result.Y)
+		if config.Debug {
+			fmt.Printf("Found point at: (%d, %d)\n", result.X, result.Y)
+		}
 
 		markerColor.RotateHue(5, "cw")
 
-		gocv.Circle(&mapImg, result, 3, markerColor.RGBA(), 3)
+		gocv.Circle(&mapImg, result, 2, markerColor.RGBA(), 2)
+
+		if config.SaveImg {
+			resultFileName := fmt.Sprintf("%s-route.png", config.MapName)
+			gocv.IMWrite(resultFileName, mapImg)
+		}
 
 		if config.ShowGUI {
 			window.IMShow(mapImg)
 
 			if window.WaitKey(1) >= 0 {
 				fmt.Println("User requested to stop processing...")
-				os.Exit(0)
 				break
 			}
 		}
 	}
+
 	fmt.Println("Results presenter stopped!")
+	os.Exit(0)
 }

@@ -23,8 +23,10 @@ var rootCmd = &cobra.Command{
 		fmt.Println("Running Apex Cartographer")
 		filePath, _ := cmd.Flags().GetString("file")
 		showGUI, _ := cmd.Flags().GetBool("gui")
+		debug, _ := cmd.Flags().GetBool("debug")
+		save, _ := cmd.Flags().GetBool("save")
 
-		config := imgproc.Config{ShowGUI: showGUI, FrameInterval: DefaultFrameInterval, MapName: "olympus"}
+		config := imgproc.Config{ShowGUI: showGUI, FrameInterval: DefaultFrameInterval, MapName: "olympus", Debug: debug, SaveImg: save}
 
 		imgproc.RunTrackingFromFile(filePath, config)
 	},
@@ -42,6 +44,8 @@ func Execute() {
 func init() {
 	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.apex-cartographer.yaml)")
 	rootCmd.Flags().StringP("file", "f", "", "Video file to run cartographer on")
+	rootCmd.MarkFlagRequired("file")
 	rootCmd.Flags().BoolP("gui", "g", false, "Show GUI with preview")
 	rootCmd.Flags().BoolP("save", "s", false, "Save route image")
+	rootCmd.Flags().BoolP("debug", "d", false, "Show debug info and windows")
 }
